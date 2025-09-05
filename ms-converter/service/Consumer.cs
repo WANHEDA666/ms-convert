@@ -105,7 +105,7 @@ public class Consumer(ILogger<Consumer> logger, IOptions<RabbitOptions> opt, Sto
             await storage.DownloadSourceDocumentAsync(source, saveName, ct);
 
             var expectedPdfPath = storage.GetResultPdfPath();
-            ConvertToPdf(GetTempFullPath(saveName));
+            converter.ConvertToPdf(storage.GetTempFullPath(saveName));
             if (File.Exists(expectedPdfPath))
             {
                 logger.LogInformation("PDF saved: {pdf}", expectedPdfPath);
@@ -169,10 +169,6 @@ public class Consumer(ILogger<Consumer> logger, IOptions<RabbitOptions> opt, Sto
         var s3Key = $"{uuid}/{baseName}.pdf";
         await s3Uploader.UploadPdfAsync(pdfFull, s3Key, ct);
     }
-
-    private static string GetTempFullPath(string saveName) => Path.Combine(AppContext.BaseDirectory, "temp", saveName.Replace('/', Path.DirectorySeparatorChar));
-
-    private void ConvertToPdf(string srcFull) => converter.ConvertToPdf(srcFull);
 
     private async Task AckAsync(ulong deliveryTag, CancellationToken ct) => 
         await _ch!.BasicAckAsync(deliveryTag, multiple: false, cancellationToken: ct);

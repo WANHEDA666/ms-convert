@@ -3,14 +3,11 @@ using NetOffice.PowerPointApi;
 
 namespace ms_converter.service;
 
-public sealed class Converter
+public sealed class Converter(Storage storage)
 {
     public void ConvertToPdf(string srcPath)
     {
-        var resultDir = Path.Combine(AppContext.BaseDirectory, "result");
-        Directory.CreateDirectory(resultDir);
-        var dstPath = Path.Combine(resultDir, "file.pdf");
-
+        var dstPath = storage.GetResultPdfPath();
         Exception? err = null;
         var thread = new Thread(() =>
         {

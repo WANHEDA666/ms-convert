@@ -64,6 +64,8 @@ public class Storage(ILogger<Storage> logger, HttpClient http, IOptionsMonitor<S
         File.Move(tmp, destFull);
     }
     
+    public string GetTempFullPath(string saveName) => Path.Combine(AppContext.BaseDirectory, "temp", saveName.Replace('/', Path.DirectorySeparatorChar));
+    
     public string GetResultPdfPath()
     {
         Directory.CreateDirectory(ResultDirectory);
