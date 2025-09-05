@@ -1,17 +1,21 @@
 using Microsoft.Extensions.Options;
+
 namespace ms_converter.service;
 
 public sealed class StorageOptions
 {
-    public string AwsS3BucketName { get; set; } = "";
-    public string? BaseDownloadUrl { get; set; }
+    public string AwsS3BucketName { get; init; } = "";
+    public string? BaseDownloadUrl { get; init; }
 }
 
-public class Storage(ILogger<Storage> logger, HttpClient http, IOptions<StorageOptions> opt)
+public class Storage(ILogger<Storage> logger, HttpClient http, IOptionsMonitor<StorageOptions> opt) : IDisposable
 {
-    private readonly StorageOptions _opt = opt.Value;
-    private string ExtractDirectory => Path.Combine(AppContext.BaseDirectory, "temp");
+    private readonly IDisposable? _reloadReg = opt.OnChange(storageOptions =>
+        logger.LogInformation("Storage options reloaded: Base={Base} | Bucket={Bucket}", storageOptions.BaseDownloadUrl, storageOptions.AwsS3BucketName));
 
+    private string ExtractDirectory => Path.Combine(AppContext.BaseDirectory, "temp");
+    private string ResultDirectory  => Path.Combine(AppContext.BaseDirectory, "result");
+    
     public void DeleteUuidFolder(string uuid)
     {
         var dir = Path.Combine(ExtractDirectory, uuid);
@@ -29,10 +33,19 @@ public class Storage(ILogger<Storage> logger, HttpClient http, IOptions<StorageO
         logger.LogInformation("Created dir: {Dir}", dir);
     }
     
-    public async Task DownloadSourceDocumentAsync(string downloadPath, string savePath, CancellationToken ct = default)
+    public async Task DownloadSourceDocumentAsync(string downloadPathOrUrl, string savePath, CancellationToken ct = default)
     {
-        var baseUrl = !string.IsNullOrWhiteSpace(_opt.BaseDownloadUrl) ? _opt.BaseDownloadUrl!.TrimEnd('/') : $"https://{_opt.AwsS3BucketName.TrimEnd('/')}";
-        var url = $"{baseUrl}/{downloadPath.TrimStart('/')}";
+        var storageOptions = opt.CurrentValue;
+        string url;
+        if (Uri.TryCreate(downloadPathOrUrl, UriKind.Absolute, out var abs) && (abs.Scheme == Uri.UriSchemeHttp || abs.Scheme == Uri.UriSchemeHttps))
+        {
+            url = abs.ToString();
+        }
+        else
+        {
+            var baseUrl = !string.IsNullOrWhiteSpace(storageOptions.BaseDownloadUrl) ? storageOptions.BaseDownloadUrl!.TrimEnd('/') : $"https://{storageOptions.AwsS3BucketName.TrimEnd('/')}";
+            url = $"{baseUrl}/{downloadPathOrUrl.TrimStart('/')}";
+        }
         logger.LogInformation("Downloading from: {Url}", url);
 
         var destFull = Path.Combine(ExtractDirectory, savePath.Replace('/', Path.DirectorySeparatorChar));
@@ -47,10 +60,32 @@ public class Storage(ILogger<Storage> logger, HttpClient http, IOptions<StorageO
         {
             await src.CopyToAsync(dst, ct);
         }
-
         if (File.Exists(destFull)) File.Delete(destFull);
         File.Move(tmp, destFull);
-
-        logger.LogInformation("Saved to: {Path}", destFull);
     }
+    
+    public string GetResultPdfPath()
+    {
+        Directory.CreateDirectory(ResultDirectory);
+        return Path.Combine(ResultDirectory, "file.pdf");
+    }
+
+    public void DeleteResultPdf()
+    {
+        var pdf = Path.Combine(ResultDirectory, "file.pdf");
+        if (File.Exists(pdf))
+        {
+            try
+            {
+                File.Delete(pdf);
+                logger.LogInformation("Deleted temp pdf: {Path}", pdf);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to delete temp pdf: {Path}", pdf);
+            }
+        }
+    }
+
+    public void Dispose() => _reloadReg?.Dispose();
 }

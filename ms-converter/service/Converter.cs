@@ -7,19 +7,37 @@ public sealed class Converter
 {
     public void ConvertToPdf(string srcPath)
     {
-        var dstPath = Path.Combine(Path.Combine(AppContext.BaseDirectory, "result"), "file.pdf");
-        var ext = Path.GetExtension(srcPath).TrimStart('.').ToLowerInvariant();
-        switch (ext)
+        var resultDir = Path.Combine(AppContext.BaseDirectory, "result");
+        Directory.CreateDirectory(resultDir);
+        var dstPath = Path.Combine(resultDir, "file.pdf");
+
+        Exception? err = null;
+        var thread = new Thread(() =>
         {
-            case "doc":
-            case "docx":
-                ConvertWord(srcPath, dstPath);
-                break;
-            case "ppt":
-            case "pptx":
-                ConvertPowerPoint(srcPath, dstPath);
-                break;
-        }
+            try
+            {
+                var ext = Path.GetExtension(srcPath).TrimStart('.').ToLowerInvariant();
+                switch (ext)
+                {
+                    case "doc":
+                    case "docx":
+                        ConvertWord(srcPath, dstPath);
+                        break;
+                    case "ppt":
+                    case "pptx":
+                        ConvertPowerPoint(srcPath, dstPath);
+                        break;
+                    default:
+                        throw new NotSupportedException($"Unsupported extension: {ext}");
+                }
+            }
+            catch (Exception ex) { err = ex; }
+        });
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+        if (err != null) throw err;
     }
 
     private void ConvertWord(string srcPath, string dstPath)
@@ -39,6 +57,10 @@ public sealed class Converter
         {
             try { doc?.Dispose(); } catch { }
             try { word?.Dispose(); } catch { }
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
         }
     }
 
@@ -50,17 +72,9 @@ public sealed class Converter
         {
             ppt = new NetOffice.PowerPointApi.Application();
             ppt.DisplayAlerts = NetOffice.PowerPointApi.Enums.PpAlertLevel.ppAlertsNone;
-            pres = ppt.Presentations.Open(
-                srcPath,
-                NetOffice.OfficeApi.Enums.MsoTriState.msoFalse,
-                NetOffice.OfficeApi.Enums.MsoTriState.msoFalse,
-                NetOffice.OfficeApi.Enums.MsoTriState.msoFalse
-            );
-            pres.SaveAs(
-                dstPath,
-                NetOffice.PowerPointApi.Enums.PpSaveAsFileType.ppSaveAsPDF,
-                NetOffice.OfficeApi.Enums.MsoTriState.msoFalse
-            );
+            pres = ppt.Presentations.Open(srcPath, NetOffice.OfficeApi.Enums.MsoTriState.msoFalse, NetOffice.OfficeApi.Enums.MsoTriState.msoFalse, 
+                NetOffice.OfficeApi.Enums.MsoTriState.msoFalse);
+            pres.SaveAs(dstPath, NetOffice.PowerPointApi.Enums.PpSaveAsFileType.ppSaveAsPDF);
             pres.Close();
             ppt.Quit();
         }
@@ -68,6 +82,10 @@ public sealed class Converter
         {
             try { pres?.Dispose(); } catch { }
             try { ppt?.Dispose(); } catch { }
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
         }
     }
 }
