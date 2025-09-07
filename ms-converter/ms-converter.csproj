@@ -1,22 +1,22 @@
 <Project Sdk="Microsoft.NET.Sdk.Worker">
+  <PropertyGroup>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>dotnet-ms_converter-e7dfb908-d224-4b20-a30c-9e843bb11ede</UserSecretsId>
+    <RootNamespace>ms_converter</RootNamespace>
+  </PropertyGroup>
 
-    <PropertyGroup>
-        <TargetFramework>net9.0</TargetFramework>
-        <Nullable>enable</Nullable>
-        <ImplicitUsings>enable</ImplicitUsings>
-        <UserSecretsId>dotnet-ms_converter-e7dfb908-d224-4b20-a30c-9e843bb11ede</UserSecretsId>
-        <RootNamespace>ms_converter</RootNamespace>
-    </PropertyGroup>
-
-    <ItemGroup>
-        <PackageReference Include="AWSSDK.S3" Version="4.0.6.13" />
-        <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.8" />
-        <PackageReference Include="Microsoft.Extensions.Http" Version="9.0.8" />
-        <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="9.0.8" />
-        <PackageReference Include="NetOfficeFw.Office" Version="1.9.7" />
-        <PackageReference Include="NetOfficeFw.PowerPoint" Version="1.9.7" />
-        <PackageReference Include="NetOfficeFw.Word" Version="1.9.7" />
-        <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
-        <PackageReference Include="RabbitMQ.Client" Version="7.0.0" />
-    </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="AWSSDK.S3" Version="4.0.6.13" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.8" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="9.0.8" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="9.0.8" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="9.0.8" />
+    <PackageReference Include="NetOfficeFw.Office" Version="1.9.7" />
+    <PackageReference Include="NetOfficeFw.PowerPoint" Version="1.9.7" />
+    <PackageReference Include="NetOfficeFw.Word" Version="1.9.7" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="RabbitMQ.Client" Version="7.0.0" />
+  </ItemGroup>
 </Project>
