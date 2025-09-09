@@ -4,14 +4,13 @@ namespace ms_converter.service;
 
 public sealed class StorageOptions
 {
-    public string AwsS3BucketName { get; init; } = "";
     public string? BaseDownloadUrl { get; init; }
 }
 
 public class Storage(ILogger<Storage> logger, HttpClient http, IOptionsMonitor<StorageOptions> opt) : IDisposable
 {
     private readonly IDisposable? _reloadReg = opt.OnChange(storageOptions =>
-        logger.LogInformation("Storage options reloaded: Base={Base} | Bucket={Bucket}", storageOptions.BaseDownloadUrl, storageOptions.AwsS3BucketName));
+        logger.LogInformation("Storage options reloaded: Base={Base}", storageOptions.BaseDownloadUrl));
 
     private string ExtractDirectory => Path.Combine(AppContext.BaseDirectory, "temp");
     private string ResultDirectory  => Path.Combine(AppContext.BaseDirectory, "result");
@@ -36,16 +35,8 @@ public class Storage(ILogger<Storage> logger, HttpClient http, IOptionsMonitor<S
     public async Task DownloadSourceDocumentAsync(string downloadPathOrUrl, string savePath, CancellationToken ct = default)
     {
         var storageOptions = opt.CurrentValue;
-        string url;
-        if (Uri.TryCreate(downloadPathOrUrl, UriKind.Absolute, out var abs) && (abs.Scheme == Uri.UriSchemeHttp || abs.Scheme == Uri.UriSchemeHttps))
-        {
-            url = abs.ToString();
-        }
-        else
-        {
-            var baseUrl = !string.IsNullOrWhiteSpace(storageOptions.BaseDownloadUrl) ? storageOptions.BaseDownloadUrl!.TrimEnd('/') : $"https://{storageOptions.AwsS3BucketName.TrimEnd('/')}";
-            url = $"{baseUrl}/{downloadPathOrUrl.TrimStart('/')}";
-        }
+        var url = Uri.TryCreate(downloadPathOrUrl, UriKind.Absolute, out var abs) && (abs.Scheme == Uri.UriSchemeHttp || abs.Scheme == Uri.UriSchemeHttps) ? abs.ToString() 
+            : $"{storageOptions.BaseDownloadUrl!.TrimEnd('/')}/{downloadPathOrUrl.TrimStart('/')}";
         logger.LogInformation("Downloading from: {Url}", url);
 
         var destFull = Path.Combine(ExtractDirectory, savePath.Replace('/', Path.DirectorySeparatorChar));

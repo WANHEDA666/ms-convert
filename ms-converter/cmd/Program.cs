@@ -18,6 +18,7 @@ builder.Services.Configure<S3Options>(builder.Configuration.GetSection("S3"));
 builder.Services.AddHttpClient<Storage>();
 builder.Services.AddTransient<Converter>();
 builder.Services.AddSingleton<S3Uploader>();
+builder.Services.AddTransient<StatusPublisher>();
 builder.Services.AddHostedService<Consumer>();
 
 var app = builder.Build();

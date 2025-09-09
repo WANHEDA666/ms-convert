@@ -10,13 +10,13 @@ namespace ms_converter.service;
 public sealed class RabbitOptions
 {
     public string AmqpUrl { get; init; } = "";
-    public string Exchange { get; init; } = "";
+    public string VHost   { get; init; } = "/";
     public string Queue { get; init; } = "";
-    public int Prefetch { get; init; } = 1;
     public string ConsumerTag { get; init; } = "";
+    public string? OutcomeQueue { get; init; }
 }
 
-public class Consumer(ILogger<Consumer> logger, IOptions<RabbitOptions> opt, Storage storage, Converter converter, S3Uploader s3Uploader) : BackgroundService
+public class Consumer(ILogger<Consumer> logger, IOptions<RabbitOptions> opt, Storage storage, Converter converter, S3Uploader s3Uploader, StatusPublisher statusPublisher) : BackgroundService
 {
     private readonly RabbitOptions _opt = opt.Value;
     private IConnection? _conn;
@@ -49,16 +49,12 @@ public class Consumer(ILogger<Consumer> logger, IOptions<RabbitOptions> opt, Sto
 
     private async Task InitializeAsync(CancellationToken ct)
     {
-        var factory = new ConnectionFactory { Uri = new Uri(_opt.AmqpUrl) };
+        var factory = new ConnectionFactory { Uri = new Uri(_opt.AmqpUrl), VirtualHost = _opt.VHost};
         _conn = await factory.CreateConnectionAsync(ct);
         _ch   = await _conn.CreateChannelAsync(cancellationToken: ct);
-
-        await _ch.ExchangeDeclareAsync(_opt.Exchange, ExchangeType.Topic, durable: true, cancellationToken: ct);
+        
         await _ch.QueueDeclareAsync(_opt.Queue, durable: true, exclusive: false, autoDelete: false, arguments: null, cancellationToken: ct);
-        await _ch.QueueBindAsync(_opt.Queue, _opt.Exchange, routingKey: "#", cancellationToken: ct);
-
-        var prefetch = (ushort)Math.Max(1, _opt.Prefetch);
-        await _ch.BasicQosAsync(0, prefetch, global: false, cancellationToken: ct);
+        await _ch.BasicQosAsync(0, 1, global: false, cancellationToken: ct);
     }
 
     private async Task DisposeChannelAndConnectionAsync()
@@ -106,10 +102,11 @@ public class Consumer(ILogger<Consumer> logger, IOptions<RabbitOptions> opt, Sto
 
             var expectedPdfPath = storage.GetResultPdfPath();
             converter.ConvertToPdf(storage.GetTempFullPath(saveName));
+
             if (File.Exists(expectedPdfPath))
             {
                 logger.LogInformation("PDF saved: {pdf}", expectedPdfPath);
-                await UploadPdfToS3Async(uuid, fileName, expectedPdfPath, ct);
+                await UploadPdfToS3Async(uuid, fileName, extension, expectedPdfPath, ct);
                 success = true;
             }
             else
@@ -124,6 +121,15 @@ public class Consumer(ILogger<Consumer> logger, IOptions<RabbitOptions> opt, Sto
         }
         finally
         {
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(uuidForCleanup))
+                    await statusPublisher.PublishAsync(uuidForCleanup, success, CancellationToken.None);
+            }
+            catch (Exception pubEx)
+            {
+                logger.LogWarning(pubEx, "failed to publish outcome for uuid={uuid}", uuidForCleanup);
+            }
             try
             {
                 if (!string.IsNullOrWhiteSpace(uuidForCleanup))
@@ -150,22 +156,33 @@ public class Consumer(ILogger<Consumer> logger, IOptions<RabbitOptions> opt, Sto
         var extension = json["extension"]?.ToString() ?? throw new InvalidOperationException("extension missing");
         return (uuid, fileName, extension);
     }
-
+    
     private static (string source, string saveName) BuildSourceAndSaveName(string uuid, string urlEncodedFileName, string extension)
     {
-        var decoded = WebUtility.UrlDecode(urlEncodedFileName);
-        var source = (Uri.TryCreate(decoded, UriKind.Absolute, out var abs) && (abs.Scheme == Uri.UriSchemeHttp || abs.Scheme == Uri.UriSchemeHttps))
-            ? abs.ToString() : (uuid + "/" + urlEncodedFileName + "." + extension).Replace("//", "/");
+        if (Uri.TryCreate(urlEncodedFileName, UriKind.Absolute, out var abs) && (abs.Scheme == Uri.UriSchemeHttp || abs.Scheme == Uri.UriSchemeHttps))
+        {
+            var saveNameAbs = $"{uuid}/file.{extension}".Replace("//", "/");
+            return (abs.ToString(), saveNameAbs);
+        }
+        var encodedName = urlEncodedFileName.Contains('%') ? urlEncodedFileName : Uri.EscapeDataString(urlEncodedFileName);
+        var source = $"{uuid}/{encodedName}.{extension}".Replace("//", "/");
         var saveName = $"{uuid}/file.{extension}".Replace("//", "/");
         return (source, saveName);
     }
-
-    private async Task UploadPdfToS3Async(string uuid, string fileName, string pdfFull, CancellationToken ct)
+    
+    private async Task UploadPdfToS3Async(string uuid, string fileName, string extension, string pdfFull, CancellationToken ct)
     {
-        var origRaw  = WebUtility.UrlDecode(fileName);
-        var baseName = Path.GetFileNameWithoutExtension(
-            Uri.TryCreate(origRaw, UriKind.Absolute, out var absUri) ? absUri.LocalPath : origRaw
-        );
+        var origRaw = WebUtility.UrlDecode(fileName);
+        string baseName;
+        if (Uri.TryCreate(origRaw, UriKind.Absolute, out var absUri))
+        {
+            baseName = Path.GetFileNameWithoutExtension(absUri.LocalPath);
+        }
+        else
+        {
+            var suffix = "." + extension.TrimStart('.');
+            baseName = origRaw.EndsWith(suffix, StringComparison.OrdinalIgnoreCase) ? origRaw[..^suffix.Length] : origRaw;
+        }
         var s3Key = $"{uuid}/{baseName}.pdf";
         await s3Uploader.UploadPdfAsync(pdfFull, s3Key, ct);
     }
@@ -175,4 +192,33 @@ public class Consumer(ILogger<Consumer> logger, IOptions<RabbitOptions> opt, Sto
 
     private async Task NackAsync(ulong deliveryTag, bool requeue, CancellationToken ct) =>
         await _ch!.BasicNackAsync(deliveryTag, multiple: false, requeue: requeue, cancellationToken: ct);
+    
+    private static bool IsIrrecoverableOfficeError(Exception ex)
+    {
+        if (ex is NetOffice.Exceptions.MethodCOMException)
+            return true;
+        if (ex is System.Runtime.InteropServices.COMException com)
+            return com.HResult is unchecked((int)0x80004005) or unchecked((int)0x80020005);
+        return false;
+    }
+
+    private static bool IsTransient(Exception ex)
+    {
+        if (ex is OperationCanceledException) 
+            return false;
+        if (ex is HttpRequestException hre)
+        {
+            if (hre.StatusCode is null) return true;
+            var code = (int)hre.StatusCode.Value;
+            return code is >= 500 or 408 or 429;
+        }
+        if (ex is Amazon.S3.AmazonS3Exception s3Ex)
+        {
+            var sc = (int)s3Ex.StatusCode;
+            return sc is >= 500 or 408 or 429;
+        }
+        if (ex is IOException ioex)
+            return ioex.HResult is unchecked((int)0x80070020) or unchecked((int)0x80070021);
+        return false;
+    }
 }
