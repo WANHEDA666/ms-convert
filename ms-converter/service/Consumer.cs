@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using Microsoft.Extensions.Options;
+using ms_converter.service.errors;
 using Newtonsoft.Json.Linq;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
@@ -85,7 +86,7 @@ public class Consumer(ILogger<Consumer> logger, IOptions<RabbitOptions> opt, Sto
     private async Task OnReceivedAsync(BasicDeliverEventArgs ea, CancellationToken ct)
     {
         string? uuidForCleanup = null;
-        var success = false;
+        bool success;
         try
         {
             var content = Encoding.UTF8.GetString(ea.Body.ToArray());
@@ -102,34 +103,56 @@ public class Consumer(ILogger<Consumer> logger, IOptions<RabbitOptions> opt, Sto
 
             var expectedPdfPath = storage.GetResultPdfPath();
             converter.ConvertToPdf(storage.GetTempFullPath(saveName));
-
-            if (File.Exists(expectedPdfPath))
+            
+            if (!File.Exists(expectedPdfPath))
             {
-                logger.LogInformation("PDF saved: {pdf}", expectedPdfPath);
-                await UploadPdfToS3Async(uuid, fileName, extension, expectedPdfPath, ct);
-                success = true;
+                throw new OfficeApiException($"PDF not found at expected path: {expectedPdfPath}");
             }
-            else
-            {
-                logger.LogWarning("PDF not found at expected path: {pdf}", expectedPdfPath);
-            }
+            await UploadPdfToS3Async(uuid, fileName, extension, expectedPdfPath, ct);
+            success = true;
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested) {}
-        catch (Exception ex)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            logger.LogError(ex, "handler error");
+            return;
         }
-        finally
+        catch (HttpRequestException hre) when (hre.StatusCode == HttpStatusCode.NotFound)
         {
+            logger.LogError(hre, "404 error");
             try
             {
                 if (!string.IsNullOrWhiteSpace(uuidForCleanup))
-                    await statusPublisher.PublishAsync(uuidForCleanup, success, CancellationToken.None);
+                    await statusPublisher.PublishAsync(uuidForCleanup, false, CancellationToken.None);
             }
             catch (Exception pubEx)
             {
                 logger.LogWarning(pubEx, "failed to publish outcome for uuid={uuid}", uuidForCleanup);
             }
+            await AckAsync(ea.DeliveryTag, ct);
+            return;
+        }
+        catch (OfficeApiException oex)
+        {
+            logger.LogError(oex, "office error");
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(uuidForCleanup))
+                    await statusPublisher.PublishAsync(uuidForCleanup, false, CancellationToken.None);
+            }
+            catch (Exception pubEx)
+            {
+                logger.LogWarning(pubEx, "failed to publish outcome for uuid={uuid}", uuidForCleanup);
+            }
+            await AckAsync(ea.DeliveryTag, ct);
+            return;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "handle error");
+            await NackAsync(ea.DeliveryTag, requeue: true, ct);
+            return;
+        }
+        finally
+        {
             try
             {
                 if (!string.IsNullOrWhiteSpace(uuidForCleanup))
@@ -142,11 +165,21 @@ public class Consumer(ILogger<Consumer> logger, IOptions<RabbitOptions> opt, Sto
             storage.DeleteResultPdf();
         }
         if (success)
+        {
+            if (!string.IsNullOrWhiteSpace(uuidForCleanup))
+            {
+                try
+                {
+                    await statusPublisher.PublishAsync(uuidForCleanup, true, CancellationToken.None);
+                }
+                catch (Exception pubEx)
+                {
+                    logger.LogWarning(pubEx, "failed to publish outcome for uuid={uuid}", uuidForCleanup);
+                }
+            }
             await AckAsync(ea.DeliveryTag, ct);
-        else
-            await NackAsync(ea.DeliveryTag, requeue: false, ct);
+        }
     }
-
 
     private static (string uuid, string fileName, string extension) ParseMessage(string content)
     {
@@ -192,33 +225,4 @@ public class Consumer(ILogger<Consumer> logger, IOptions<RabbitOptions> opt, Sto
 
     private async Task NackAsync(ulong deliveryTag, bool requeue, CancellationToken ct) =>
         await _ch!.BasicNackAsync(deliveryTag, multiple: false, requeue: requeue, cancellationToken: ct);
-    
-    private static bool IsIrrecoverableOfficeError(Exception ex)
-    {
-        if (ex is NetOffice.Exceptions.MethodCOMException)
-            return true;
-        if (ex is System.Runtime.InteropServices.COMException com)
-            return com.HResult is unchecked((int)0x80004005) or unchecked((int)0x80020005);
-        return false;
-    }
-
-    private static bool IsTransient(Exception ex)
-    {
-        if (ex is OperationCanceledException) 
-            return false;
-        if (ex is HttpRequestException hre)
-        {
-            if (hre.StatusCode is null) return true;
-            var code = (int)hre.StatusCode.Value;
-            return code is >= 500 or 408 or 429;
-        }
-        if (ex is Amazon.S3.AmazonS3Exception s3Ex)
-        {
-            var sc = (int)s3Ex.StatusCode;
-            return sc is >= 500 or 408 or 429;
-        }
-        if (ex is IOException ioex)
-            return ioex.HResult is unchecked((int)0x80070020) or unchecked((int)0x80070021);
-        return false;
-    }
 }

@@ -1,3 +1,4 @@
+using ms_converter.service.errors;
 using NetOffice.WordApi;
 using NetOffice.PowerPointApi;
 
@@ -18,17 +19,34 @@ public sealed class Converter(Storage storage)
                 {
                     case "doc":
                     case "docx":
+                    case "odt":
+                    case "txt":
                         ConvertWord(srcPath, dstPath);
                         break;
                     case "ppt":
                     case "pptx":
+                    case "pps":
+                    case "ppsx":
+                    case "pptm":
+                    case "pot":
+                    case "odp":
                         ConvertPowerPoint(srcPath, dstPath);
                         break;
                     default:
                         throw new NotSupportedException($"Unsupported extension: {ext}");
                 }
             }
-            catch (Exception ex) { err = ex; }
+            catch (System.Runtime.InteropServices.COMException com)
+            {
+                throw new OfficeApiException(com.Message);
+            }
+            catch (Exception ex) when (ex.Source?.Contains("Word", StringComparison.OrdinalIgnoreCase) == true 
+                                       || ex.Source?.Contains("PowerPoint", StringComparison.OrdinalIgnoreCase) == true
+                                       || (ex.StackTrace?.Contains("NetOffice.WordApi") ?? false)
+                                       || (ex.StackTrace?.Contains("NetOffice.PowerPointApi") ?? false))
+            {
+                throw new OfficeApiException(ex.Message);
+            }
         });
 
         thread.SetApartmentState(ApartmentState.STA);
