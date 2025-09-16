@@ -106,7 +106,7 @@ public class Consumer(ILogger<Consumer> logger, IOptions<RabbitOptions> opt, Sto
             
             if (!File.Exists(expectedPdfPath))
             {
-                throw new OfficeApiException($"PDF not found at expected path: {expectedPdfPath}");
+                throw new LocalOfficeApiException($"PDF not found at expected path: {expectedPdfPath}");
             }
             await UploadPdfToS3Async(uuid, fileName, extension, expectedPdfPath, ct);
             success = true;
@@ -130,7 +130,7 @@ public class Consumer(ILogger<Consumer> logger, IOptions<RabbitOptions> opt, Sto
             await AckAsync(ea.DeliveryTag, ct);
             return;
         }
-        catch (OfficeApiException oex)
+        catch (LocalOfficeApiException oex)
         {
             logger.LogError(oex, "office error");
             try

@@ -38,14 +38,18 @@ public sealed class Converter(Storage storage)
             }
             catch (System.Runtime.InteropServices.COMException com)
             {
-                throw new OfficeApiException(com.Message);
+                err = new LocalOfficeApiException(com.Message);
             }
             catch (Exception ex) when (ex.Source?.Contains("Word", StringComparison.OrdinalIgnoreCase) == true 
                                        || ex.Source?.Contains("PowerPoint", StringComparison.OrdinalIgnoreCase) == true
                                        || (ex.StackTrace?.Contains("NetOffice.WordApi") ?? false)
                                        || (ex.StackTrace?.Contains("NetOffice.PowerPointApi") ?? false))
             {
-                throw new OfficeApiException(ex.Message);
+                err = new LocalOfficeApiException(ex.Message);
+            }
+            catch (Exception ex)
+            {
+                err = ex;
             }
         });
 
