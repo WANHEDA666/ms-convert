@@ -1,6 +1,10 @@
+using System.Runtime.InteropServices;
 using ms_converter.service.errors;
+using NetOffice.OfficeApi.Enums;
 using NetOffice.WordApi;
 using NetOffice.PowerPointApi;
+using NetOffice.PowerPointApi.Enums;
+using NetOffice.WordApi.Enums;
 
 namespace ms_converter.service;
 
@@ -36,7 +40,7 @@ public sealed class Converter(Storage storage)
                         throw new NotSupportedException($"Unsupported extension: {ext}");
                 }
             }
-            catch (System.Runtime.InteropServices.COMException com)
+            catch (COMException com)
             {
                 err = new LocalOfficeApiException(com.Message);
             }
@@ -66,15 +70,43 @@ public sealed class Converter(Storage storage)
         try
         {
             word = new NetOffice.WordApi.Application { Visible = false };
-            word.DisplayAlerts = NetOffice.WordApi.Enums.WdAlertLevel.wdAlertsNone;
-            doc = word.Documents.Open(srcPath);
-            doc.SaveAs2(dstPath, NetOffice.WordApi.Enums.WdSaveFormat.wdFormatPDF);
-            doc.Close(NetOffice.WordApi.Enums.WdSaveOptions.wdDoNotSaveChanges);
-            word.Quit();
+            word.DisplayAlerts = WdAlertLevel.wdAlertsNone;
+            doc = word.Documents.OpenNoRepairDialog(
+                fileName: srcPath,
+                confirmConversions: MsoTriState.msoFalse,
+                readOnly: MsoTriState.msoTrue,
+                addToRecentFiles: MsoTriState.msoFalse,
+                passwordDocument: "FAKE",
+                passwordTemplate: "FAKE",
+                revert: MsoTriState.msoCTrue,
+                writePasswordDocument: "FAKE",
+                writePasswordTemplate: "FAKE",
+                format: WdOpenFormat.wdOpenFormatAuto,
+                encoding: MsoEncoding.msoEncodingAutoDetect,
+                visible: MsoTriState.msoFalse,
+                openAndRepair: MsoTriState.msoTrue,
+                documentDirection: WdDocumentDirection.wdLeftToRight,
+                noEncodingDialog: MsoTriState.msoTrue
+            );
+
+            doc.SaveAs2(dstPath, WdSaveFormat.wdFormatPDF);
+            doc.Close(WdSaveOptions.wdDoNotSaveChanges);
+            doc.Dispose();
+            doc = null;
+        }
+        catch (COMException com)
+        {
+            throw new LocalOfficeApiException(com.Message);
+        }
+        catch (Exception ex) when ((ex.Source?.Contains("Word", StringComparison.OrdinalIgnoreCase) ?? false) || (ex.StackTrace?.Contains("NetOffice.WordApi") ?? false))
+        {
+            throw new LocalOfficeApiException(ex.Message);
         }
         finally
         {
+            try { doc?.Close(WdSaveOptions.wdDoNotSaveChanges); } catch { }
             try { doc?.Dispose(); } catch { }
+            try { word?.Quit(); } catch { }
             try { word?.Dispose(); } catch { }
             GC.Collect();
             GC.WaitForPendingFinalizers();
@@ -90,16 +122,46 @@ public sealed class Converter(Storage storage)
         try
         {
             ppt = new NetOffice.PowerPointApi.Application();
-            ppt.DisplayAlerts = NetOffice.PowerPointApi.Enums.PpAlertLevel.ppAlertsNone;
-            pres = ppt.Presentations.Open(srcPath, NetOffice.OfficeApi.Enums.MsoTriState.msoFalse, NetOffice.OfficeApi.Enums.MsoTriState.msoFalse, 
-                NetOffice.OfficeApi.Enums.MsoTriState.msoFalse);
-            pres.SaveAs(dstPath, NetOffice.PowerPointApi.Enums.PpSaveAsFileType.ppSaveAsPDF);
+            ppt.DisplayAlerts = PpAlertLevel.ppAlertsNone;
+            var openPath = srcPath + "::FAKE::FAKE";
+            try
+            {
+                pres = ppt.Presentations.Open(
+                    fileName: openPath,
+                    readOnly: MsoTriState.msoTrue,
+                    untitled: MsoTriState.msoFalse,
+                    withWindow: MsoTriState.msoFalse
+                );
+            }
+            catch
+            {
+                pres = ppt.Presentations.Open2007(
+                    fileName: openPath,
+                    readOnly: MsoTriState.msoTrue,
+                    untitled: MsoTriState.msoFalse,
+                    withWindow: MsoTriState.msoFalse,
+                    openAndRepair: MsoTriState.msoTrue
+                );
+            }
+
+            pres.SaveAs(dstPath, PpSaveAsFileType.ppSaveAsPDF);
             pres.Close();
-            ppt.Quit();
+            pres.Dispose();
+            pres = null;
+        }
+        catch (COMException com)
+        {
+            throw new LocalOfficeApiException(com.Message);
+        }
+        catch (Exception ex) when ((ex.Source?.Contains("PowerPoint", StringComparison.OrdinalIgnoreCase) ?? false) || (ex.StackTrace?.Contains("NetOffice.PowerPointApi") ?? false))
+        {
+            throw new LocalOfficeApiException(ex.Message);
         }
         finally
         {
+            try { pres?.Close(); } catch { }
             try { pres?.Dispose(); } catch { }
+            try { ppt?.Quit(); } catch { }
             try { ppt?.Dispose(); } catch { }
             GC.Collect();
             GC.WaitForPendingFinalizers();

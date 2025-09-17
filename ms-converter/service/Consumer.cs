@@ -108,7 +108,7 @@ public class Consumer(ILogger<Consumer> logger, IOptions<RabbitOptions> opt, Sto
             {
                 throw new LocalOfficeApiException($"PDF not found at expected path: {expectedPdfPath}");
             }
-            await UploadPdfToS3Async(uuid, fileName, extension, expectedPdfPath, ct);
+            //await UploadPdfToS3Async(uuid, fileName, extension, expectedPdfPath, ct);
             success = true;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -162,7 +162,7 @@ public class Consumer(ILogger<Consumer> logger, IOptions<RabbitOptions> opt, Sto
             {
                 logger.LogWarning(ex, "cleanup temp failed for uuid {uuid}", uuidForCleanup);
             }
-            storage.DeleteResultPdf();
+            //storage.DeleteResultPdf();
         }
         if (success)
         {
