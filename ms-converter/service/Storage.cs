@@ -33,7 +33,7 @@ public class Storage(ILogger<Storage> logger, HttpClient http, IOptionsMonitor<S
     }
     
     public async Task DownloadSourceDocumentAsync(string downloadPathOrUrl, string savePath, CancellationToken ct = default)
-    {
+    { 
         var storageOptions = opt.CurrentValue;
         var url = Uri.TryCreate(downloadPathOrUrl, UriKind.Absolute, out var abs) && (abs.Scheme == Uri.UriSchemeHttp || abs.Scheme == Uri.UriSchemeHttps) ? abs.ToString() 
             : $"{storageOptions.BaseDownloadUrl!.TrimEnd('/')}/{downloadPathOrUrl.TrimStart('/')}";
@@ -62,7 +62,44 @@ public class Storage(ILogger<Storage> logger, HttpClient http, IOptionsMonitor<S
         Directory.CreateDirectory(ResultDirectory);
         return Path.Combine(ResultDirectory, "file.pdf");
     }
+    
+    public string GetResultHtmlPath()
+    {
+        Directory.CreateDirectory(ResultDirectory);
+        return Path.Combine(ResultDirectory, "file.html");
+    }
+    
+    public void DeleteResultHtml()
+    {
+        var html = Path.Combine(ResultDirectory, "file.html");
+        if (File.Exists(html))
+        {
+            try
+            {
+                File.Delete(html);
+                logger.LogInformation("Deleted temp html: {Path}", html);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to delete temp html: {Path}", html);
+            }
+        }
 
+        var files = Path.Combine(ResultDirectory, "file.files");
+        if (Directory.Exists(files))
+        {
+            try
+            {
+                Directory.Delete(files, recursive: true);
+                logger.LogInformation("Deleted temp files: {Path}", files);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to delete temp files: {Path}", files);
+            }
+        }
+    }
+    
     public void DeleteResultPdf()
     {
         var pdf = Path.Combine(ResultDirectory, "file.pdf");

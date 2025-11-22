@@ -87,12 +87,13 @@ public class Consumer(ILogger<Consumer> logger, IOptions<RabbitOptions> opt, Sto
     {
         string? uuidForCleanup = null;
         bool success;
+        bool forDelete = false;
         try
         {
             var content = Encoding.UTF8.GetString(ea.Body.ToArray());
             logger.LogInformation("recieve message with content: {content}", content);
 
-            var (uuid, fileName, extension) = ParseMessage(content);
+            var (uuid, fileName, extension, output) = ParseMessage(content);
             uuidForCleanup = uuid;
             var (source, saveName) = BuildSourceAndSaveName(uuid, fileName, extension);
             logger.LogInformation("source={source} | saveName={saveName}", source, saveName);
@@ -102,13 +103,42 @@ public class Consumer(ILogger<Consumer> logger, IOptions<RabbitOptions> opt, Sto
             await storage.DownloadSourceDocumentAsync(source, saveName, ct);
 
             var expectedPdfPath = storage.GetResultPdfPath();
-            converter.ConvertToPdf(storage.GetTempFullPath(saveName));
+            var expectedHtmlPath = storage.GetResultHtmlPath();
             
-            if (!File.Exists(expectedPdfPath))
+            if (output == "html")
             {
-                throw new LocalOfficeApiException($"PDF not found at expected path: {expectedPdfPath}");
+                converter.ConvertToHtml(storage.GetTempFullPath(saveName));
+                
+                if (!File.Exists(expectedHtmlPath))
+                {
+                    throw new LocalOfficeApiException($"HTML not found at expected path: {expectedHtmlPath}");
+                }
+                var ext = Path.GetExtension(storage.GetTempFullPath(saveName)).TrimStart('.').ToLowerInvariant();
+                switch (ext)
+                {
+                    case "ppt":
+                    case "pptx":
+                    case "pps":
+                    case "ppsx":
+                    case "pptm":
+                    case "pot":
+                    case "odp":
+                        forDelete =  true;
+                        await UploadHtmlToS3Async(uuid, expectedHtmlPath, ct);
+                        break;
+                }
+
+            } else if (output == "pdf")
+            {
+                converter.ConvertToPdf(storage.GetTempFullPath(saveName));
+            
+                if (!File.Exists(expectedPdfPath))
+                {
+                    throw new LocalOfficeApiException($"PDF not found at expected path: {expectedPdfPath}");
+                }
+                await UploadPdfToS3Async(uuid, fileName, extension, expectedPdfPath, ct);
+                forDelete =  true;
             }
-            //await UploadPdfToS3Async(uuid, fileName, extension, expectedPdfPath, ct);
             success = true;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -162,7 +192,11 @@ public class Consumer(ILogger<Consumer> logger, IOptions<RabbitOptions> opt, Sto
             {
                 logger.LogWarning(ex, "cleanup temp failed for uuid {uuid}", uuidForCleanup);
             }
-            //storage.DeleteResultPdf();
+            if (forDelete)
+            {
+                storage.DeleteResultPdf();
+                storage.DeleteResultHtml();
+            }
         }
         if (success)
         {
@@ -170,7 +204,7 @@ public class Consumer(ILogger<Consumer> logger, IOptions<RabbitOptions> opt, Sto
             {
                 try
                 {
-                    await statusPublisher.PublishAsync(uuidForCleanup, true, CancellationToken.None);
+                   await statusPublisher.PublishAsync(uuidForCleanup, true, CancellationToken.None);
                 }
                 catch (Exception pubEx)
                 {
@@ -181,13 +215,14 @@ public class Consumer(ILogger<Consumer> logger, IOptions<RabbitOptions> opt, Sto
         }
     }
 
-    private static (string uuid, string fileName, string extension) ParseMessage(string content)
+    private static (string uuid, string fileName, string extension, string output) ParseMessage(string content)
     {
         var json = JObject.Parse(content);
         var uuid = json["uuid"]?.ToString() ?? throw new InvalidOperationException("uuid missing");
         var fileName = json["urlEncodedFileName"]?.ToString() ?? throw new InvalidOperationException("urlEncodedFileName missing");
         var extension = json["extension"]?.ToString() ?? throw new InvalidOperationException("extension missing");
-        return (uuid, fileName, extension);
+        var output = json["output"]?.ToString()?.ToLowerInvariant() ?? "pdf";
+        return (uuid, fileName, extension, output);
     }
     
     private static (string source, string saveName) BuildSourceAndSaveName(string uuid, string urlEncodedFileName, string extension)
@@ -217,7 +252,24 @@ public class Consumer(ILogger<Consumer> logger, IOptions<RabbitOptions> opt, Sto
             baseName = origRaw.EndsWith(suffix, StringComparison.OrdinalIgnoreCase) ? origRaw[..^suffix.Length] : origRaw;
         }
         var s3Key = $"{uuid}/{baseName}.pdf";
-        await s3Uploader.UploadPdfAsync(pdfFull, s3Key, ct);
+        await s3Uploader.UploadFileAsync(pdfFull, s3Key, "application/pdf", ct);
+    }
+    
+    private async Task UploadHtmlToS3Async(string uuid, string htmlFullPath, CancellationToken ct)
+    {
+        var htmlKey = $"{uuid}/presentation.html";
+        await s3Uploader.UploadFileAsync(htmlFullPath, htmlKey, "text/html", ct);
+
+        var imagesDir = Path.Combine(Path.GetDirectoryName(htmlFullPath) ?? ".", Path.GetFileNameWithoutExtension(htmlFullPath) + ".files");
+        if (Directory.Exists(imagesDir))
+        {
+            foreach (var f in Directory.GetFiles(imagesDir))
+            {
+                var fileName = Path.GetFileName(f);
+                var fileKey = $"{uuid}/{Path.GetFileNameWithoutExtension(htmlFullPath)}.files/{fileName}";
+                await s3Uploader.UploadFileAsync(f, fileKey, "image/jpeg", ct);
+            }
+        }
     }
 
     private async Task AckAsync(ulong deliveryTag, CancellationToken ct) => 
