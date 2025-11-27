@@ -227,10 +227,16 @@ public class Consumer(ILogger<Consumer> logger, IOptions<RabbitOptions> opt, Sto
     
     private static (string source, string saveName) BuildSourceAndSaveName(string uuid, string urlEncodedFileName, string extension)
     {
-        if (Uri.TryCreate(urlEncodedFileName, UriKind.Absolute, out var abs) && (abs.Scheme == Uri.UriSchemeHttp || abs.Scheme == Uri.UriSchemeHttps))
+        var decoded = WebUtility.UrlDecode(urlEncodedFileName);
+        if (Uri.TryCreate(decoded, UriKind.Absolute, out var abs) && (abs.Scheme == Uri.UriSchemeHttp || abs.Scheme == Uri.UriSchemeHttps))
         {
-            var saveNameAbs = $"{uuid}/file.{extension}".Replace("//", "/");
-            return (abs.ToString(), saveNameAbs);
+            var path = abs.AbsolutePath;
+            var hasFileName = !string.IsNullOrEmpty(path) && path != "/" && Path.HasExtension(path);
+            if (hasFileName)
+            {
+                var saveNameAbs = $"{uuid}/file.{extension}".Replace("//", "/");
+                return (abs.ToString(), saveNameAbs);
+            }
         }
         var encodedName = urlEncodedFileName.Contains('%') ? urlEncodedFileName : Uri.EscapeDataString(urlEncodedFileName);
         var source = $"{uuid}/{encodedName}.{extension}".Replace("//", "/");

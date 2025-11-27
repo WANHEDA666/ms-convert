@@ -119,12 +119,14 @@ public sealed class Converter(Storage storage)
     private void ConvertPowerPoint(string srcPath, string dstPath)
     {
         NetOffice.PowerPointApi.Application? ppt = null;
-        Presentation? pres = null;
+        NetOffice.PowerPointApi.Presentation? pres = null;
         try
         {
             ppt = new NetOffice.PowerPointApi.Application();
             ppt.DisplayAlerts = PpAlertLevel.ppAlertsNone;
+
             var openPath = srcPath + "::FAKE::FAKE";
+
             try
             {
                 pres = ppt.Presentations.Open(
@@ -146,9 +148,6 @@ public sealed class Converter(Storage storage)
             }
 
             pres.SaveAs(dstPath, PpSaveAsFileType.ppSaveAsPDF);
-            pres.Close();
-            pres.Dispose();
-            pres = null;
         }
         catch (COMException com)
         {
@@ -160,16 +159,33 @@ public sealed class Converter(Storage storage)
         }
         finally
         {
-            try { pres?.Close(); } catch { }
-            try { pres?.Dispose(); } catch { }
-            try { ppt?.Quit(); } catch { }
-            try { ppt?.Dispose(); } catch { }
+            try
+            {
+                if (pres != null)
+                {
+                    try { pres.Close(); } catch { }
+                    pres.Dispose();
+                }
+            }
+            catch { }
+
+            try
+            {
+                if (ppt != null)
+                {
+                    try { ppt.Quit(); } catch { }
+                    ppt.Dispose();
+                }
+            }
+            catch { }
+
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
             GC.WaitForPendingFinalizers();
         }
     }
+
     
     public void ConvertToHtml(string srcPath)
     {
@@ -280,14 +296,17 @@ public sealed class Converter(Storage storage)
     {
         NetOffice.PowerPointApi.Application? ppt = null;
         NetOffice.PowerPointApi.Presentation? pres = null;
+        NetOffice.PowerPointApi.Slides? slidesCollection = null;
+
         try
         {
             var dstDir = Path.GetDirectoryName(dstHtmlPath) ?? ".";
             Directory.CreateDirectory(dstDir);
+
             var imagesDir = Path.Combine(dstDir, Path.GetFileNameWithoutExtension(dstHtmlPath) + ".files");
             Directory.CreateDirectory(imagesDir);
 
-            ppt = new NetOffice.PowerPointApi.Application {};
+            ppt = new NetOffice.PowerPointApi.Application();
             ppt.DisplayAlerts = PpAlertLevel.ppAlertsNone;
 
             var openPath = srcPath + "::FAKE::FAKE";
@@ -314,63 +333,93 @@ public sealed class Converter(Storage storage)
             int slideWidth = (int)pres.PageSetup.SlideWidth;
             int slideHeight = (int)pres.PageSetup.SlideHeight;
 
-            var slides = new List<(string ImgPath, string Text)>();
+            var slidesResult = new List<(string ImgPath, string Text)>();
 
-            var slidesCollection = pres.Slides;
+            slidesCollection = pres.Slides;
             int slidesCount = slidesCollection.Count;
 
             for (int i = 1; i <= slidesCount; i++)
             {
-                var slide = slidesCollection[i];
+                NetOffice.PowerPointApi.Slide? slide = null;
+                NetOffice.PowerPointApi.Shapes? shapesCollection = null;
 
-                string slideIndex = slide.SlideIndex.ToString().PadLeft(2, '0');
-                var sb = new StringBuilder();
-
-                var shapesCollection = slide.Shapes;
-                int shapesCount = shapesCollection.Count;
-                for (int j = 1; j <= shapesCount; j++)
+                try
                 {
-                    var shape = shapesCollection[j];
-                    CollectShapeText(shape, sb);
+                    slide = slidesCollection[i];
+
+                    string slideIndex = slide.SlideIndex.ToString().PadLeft(2, '0');
+                    var sb = new StringBuilder();
+
+                    shapesCollection = slide.Shapes;
+                    int shapesCount = shapesCollection.Count;
+
+                    for (int j = 1; j <= shapesCount; j++)
+                    {
+                        NetOffice.PowerPointApi.Shape? shape = null;
+                        try
+                        {
+                            shape = shapesCollection[j];
+                            CollectShapeText(shape, sb);
+                        }
+                        finally
+                        {
+                            try { shape?.Dispose(); } catch { }
+                        }
+                    }
+
+                    var slideImagePath = Path.Combine(imagesDir, $"slide_{slideIndex}.jpg");
+                    slide.Export(slideImagePath, "JPG", slideWidth, slideHeight);
+
+                    slidesResult.Add((slideImagePath, sb.ToString()));
                 }
-
-                var slideImagePath = Path.Combine(imagesDir, $"slide_{slideIndex}.jpg");
-                slide.Export(slideImagePath, "JPG", slideWidth, slideHeight);
-
-                slides.Add((slideImagePath, sb.ToString()));
+                finally
+                {
+                    try { shapesCollection?.Dispose(); } catch { }
+                    try { slide?.Dispose(); } catch { }
+                }
             }
+
+            try { slidesCollection?.Dispose(); } catch { }
 
             var imagesDirName = Path.GetFileName(imagesDir);
-            using var sw = new StreamWriter(dstHtmlPath, false, Encoding.UTF8);
-            sw.WriteLine("<!doctype html>");
-            sw.WriteLine("<html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">");
-            sw.WriteLine("<title>Presentation</title>");
-            sw.WriteLine("</head><body>");
-            for (int i = 0; i < slides.Count; i++)
+
+            using (var sw = new StreamWriter(dstHtmlPath, false, Encoding.UTF8))
             {
-                var s = slides[i];
-                var imgRel = imagesDirName + "/" + Path.GetFileName(s.ImgPath);
-                sw.WriteLine($"<section style=\"margin-bottom:40px;\">");
-                sw.WriteLine($"<h2>Slide {i + 1}</h2>");
-                sw.WriteLine($"<img src=\"{imgRel}\" alt=\"slide {i + 1}\" style=\"max-width:100%;height:auto;display:block;\"/>");
-                if (!string.IsNullOrWhiteSpace(s.Text))
+                sw.WriteLine("<!doctype html>");
+                sw.WriteLine("<html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">");
+                sw.WriteLine("<title>Presentation</title>");
+                sw.WriteLine("</head><body>");
+
+                for (int i = 0; i < slidesResult.Count; i++)
                 {
-                    var encoded = System.Net.WebUtility.HtmlEncode(s.Text).Replace("\n", "<br>");
-                    sw.WriteLine($"<div>{encoded}</div>");
+                    var s = slidesResult[i];
+                    var imgRel = imagesDirName + "/" + Path.GetFileName(s.ImgPath);
+
+                    sw.WriteLine("<section style=\"margin-bottom:40px;\">");
+                    sw.WriteLine($"<h2>Slide {i + 1}</h2>");
+                    sw.WriteLine($"<img src=\"{imgRel}\" alt=\"slide {i + 1}\" style=\"max-width:100%;height:auto;display:block;\"/>");
+
+                    if (!string.IsNullOrWhiteSpace(s.Text))
+                    {
+                        var encoded = System.Net.WebUtility.HtmlEncode(s.Text).Replace("\n", "<br>");
+                        sw.WriteLine($"<div>{encoded}</div>");
+                    }
+
+                    sw.WriteLine("</section>");
                 }
 
-                sw.WriteLine("</section>");
+                sw.WriteLine("</body></html>");
+                sw.Flush();
             }
-
-            sw.WriteLine("</body></html>");
-            sw.Flush();
         }
         finally
         {
             try { pres?.Close(); } catch { }
-            try { pres?.Dispose(); } catch { } 
+            try { pres?.Dispose(); } catch { }
+
             try { ppt?.Quit(); } catch { }
             try { ppt?.Dispose(); } catch { }
+
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
@@ -378,24 +427,76 @@ public sealed class Converter(Storage storage)
         }
     }
     
-    private static void CollectShapeText(NetOffice.PowerPointApi.Shape shape, System.Text.StringBuilder sb)
+    private static void CollectShapeText(NetOffice.PowerPointApi.Shape shape, StringBuilder sb)
     {
-        if (shape.HasSmartArt == MsoTriState.msoTrue)
+        try
         {
-            var sa = shape.SmartArt;
-            foreach (NetOffice.OfficeApi.SmartArtNode node in sa.AllNodes)
+            if (shape.HasSmartArt == MsoTriState.msoTrue)
             {
-                sb.AppendLine(node.TextFrame2.TextRange.Text);
+                NetOffice.OfficeApi.SmartArt? smartArt = null;
+                NetOffice.OfficeApi.SmartArtNodes? nodes = null;
+
+                try
+                {
+                    smartArt = shape.SmartArt;
+                    nodes = smartArt.AllNodes;
+
+                    foreach (NetOffice.OfficeApi.SmartArtNode node in nodes)
+                    {
+                        try
+                        {
+                            var text = node.TextFrame2.TextRange.Text;
+                            if (!string.IsNullOrWhiteSpace(text))
+                                sb.AppendLine(text);
+                        }
+                        finally
+                        {
+                            try { node.Dispose(); } catch { }
+                        }
+                    }
+                }
+                finally
+                {
+                    try { nodes?.Dispose(); } catch { }
+                    try { smartArt?.Dispose(); } catch { }
+                }
+            }
+            else if (shape.HasTextFrame == MsoTriState.msoTrue && shape.TextFrame.HasText == MsoTriState.msoTrue)
+            {
+                try
+                {
+                    var text = shape.TextFrame.TextRange.Text;
+                    if (!string.IsNullOrWhiteSpace(text))
+                        sb.AppendLine(text);
+                }
+                catch {}
+            }
+            else if (shape.Type == MsoShapeType.msoGroup)
+            {
+                NetOffice.PowerPointApi.GroupShapes? groupItems = null;
+
+                try
+                {
+                    groupItems = shape.GroupItems;
+
+                    foreach (NetOffice.PowerPointApi.Shape child in groupItems)
+                    {
+                        try
+                        {
+                            CollectShapeText(child, sb);
+                        }
+                        finally
+                        {
+                            try { child.Dispose(); } catch { }
+                        }
+                    }
+                }
+                finally
+                {
+                    try { groupItems?.Dispose(); } catch { }
+                }
             }
         }
-        else if (shape.HasTextFrame == MsoTriState.msoTrue && shape.TextFrame.HasText == MsoTriState.msoTrue)
-        {
-            sb.AppendLine(shape.TextFrame.TextRange.Text);
-        }
-        else if (shape.Type == NetOffice.OfficeApi.Enums.MsoShapeType.msoGroup)
-        {
-            foreach (NetOffice.PowerPointApi.Shape child in shape.GroupItems)
-                CollectShapeText(child, sb);
-        }
+        catch {}
     }
 }
