@@ -136,7 +136,7 @@ public class Consumer(ILogger<Consumer> logger, IOptions<RabbitOptions> opt, Sto
                 {
                     throw new LocalOfficeApiException($"PDF not found at expected path: {expectedPdfPath}");
                 }
-                await UploadPdfToS3Async(uuid, fileName, extension, expectedPdfPath, ct);
+                await UploadPdfToS3Async(uuid, fileName, expectedPdfPath, ct);
                 forDelete =  true;
             }
             success = true;
@@ -227,37 +227,14 @@ public class Consumer(ILogger<Consumer> logger, IOptions<RabbitOptions> opt, Sto
     
     private static (string source, string saveName) BuildSourceAndSaveName(string uuid, string urlEncodedFileName, string extension)
     {
-        var decoded = WebUtility.UrlDecode(urlEncodedFileName);
-        if (Uri.TryCreate(decoded, UriKind.Absolute, out var abs) && (abs.Scheme == Uri.UriSchemeHttp || abs.Scheme == Uri.UriSchemeHttps))
-        {
-            var path = abs.AbsolutePath;
-            var hasFileName = !string.IsNullOrEmpty(path) && path != "/" && Path.HasExtension(path);
-            if (hasFileName)
-            {
-                var saveNameAbs = $"{uuid}/file.{extension}".Replace("//", "/");
-                return (abs.ToString(), saveNameAbs);
-            }
-        }
-        var encodedName = urlEncodedFileName.Contains('%') ? urlEncodedFileName : Uri.EscapeDataString(urlEncodedFileName);
-        var source = $"{uuid}/{encodedName}.{extension}".Replace("//", "/");
-        var saveName = $"{uuid}/file.{extension}".Replace("//", "/");
+        var source = $"{uuid}/{urlEncodedFileName}.{extension}";
+        var saveName = $"{uuid}/file.{extension}";
         return (source, saveName);
     }
     
-    private async Task UploadPdfToS3Async(string uuid, string fileName, string extension, string pdfFull, CancellationToken ct)
+    private async Task UploadPdfToS3Async(string uuid, string fileName, string pdfFull, CancellationToken ct)
     {
-        var origRaw = WebUtility.UrlDecode(fileName);
-        string baseName;
-        if (Uri.TryCreate(origRaw, UriKind.Absolute, out var absUri))
-        {
-            baseName = Path.GetFileNameWithoutExtension(absUri.LocalPath);
-        }
-        else
-        {
-            var suffix = "." + extension.TrimStart('.');
-            baseName = origRaw.EndsWith(suffix, StringComparison.OrdinalIgnoreCase) ? origRaw[..^suffix.Length] : origRaw;
-        }
-        var s3Key = $"{uuid}/{baseName}.pdf";
+        var s3Key = $"{uuid}/{fileName}.pdf";
         await s3Uploader.UploadFileAsync(pdfFull, s3Key, "application/pdf", ct);
     }
     
