@@ -1,9 +1,9 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using ms_converter.service.errors;
 using NetOffice.OfficeApi.Enums;
 using NetOffice.WordApi;
-using NetOffice.PowerPointApi;
 using NetOffice.PowerPointApi.Enums;
 using NetOffice.WordApi.Enums;
 
@@ -109,10 +109,17 @@ public sealed class Converter(Storage storage)
             try { doc?.Dispose(); } catch { }
             try { word?.Quit(); } catch { }
             try { word?.Dispose(); } catch { }
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
+
+            KillAllComSurrogates();
+        }
+    }
+
+    private static void KillAllComSurrogates()
+    {
+        foreach (var p in Process.GetProcessesByName("dllhost"))
+        {
+            try { p.Kill(entireProcessTree: true); }
+            catch { /* ignore */ }
         }
     }
 
